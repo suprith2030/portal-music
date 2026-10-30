@@ -198,6 +198,10 @@ export default function useAudioPlayer(
   }, [songs.length, currentIndex, isShuffle, getRandomIndex, setCurrentIndex]);
 
   // ─── Auto advance on track ended ───
+  // When a song ends, always advance to the next song automatically.
+  // Repeat-one loops the current track; shuffle picks a random track;
+  // repeat-all wraps around from the last to first track;
+  // repeat-off still auto-plays the next song (stops only after the LAST song).
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -208,6 +212,10 @@ export default function useAudioPlayer(
         audio.play().catch(() => {});
         return;
       }
+
+      // Mark that we were playing so the canplay handler auto-starts next track
+      wasPlayingRef.current = true;
+
       if (isShuffle) {
         setCurrentIndex(getRandomIndex(currentIndex));
         return;
@@ -217,6 +225,9 @@ export default function useAudioPlayer(
         if (repeatMode === 'all') {
           setCurrentIndex(0);
         } else {
+          // Last song in non-repeat mode: wrap to start and stop
+          setCurrentIndex(0);
+          wasPlayingRef.current = false;
           setIsPlaying(false);
         }
       } else {

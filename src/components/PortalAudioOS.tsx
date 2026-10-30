@@ -33,6 +33,8 @@ import UploadModal from './UploadModal';
 import DeleteTrackModal from './DeleteTrackModal';
 import TickerStrip from './TickerStrip';
 import HalftoneImage from './HalftoneImage';
+import CyberClock from './CyberClock';
+import MoodBot from './MoodBot';
 
 // Helper to sort songs alphabetically by title
 const sortAlphabetical = (trackList: Song[]): Song[] =>
@@ -317,6 +319,11 @@ export default function PortalAudioOS() {
         <p className="font-caveat mt-1 text-base sm:text-lg text-white/75 font-semibold">
           retro-futuristic cyber-terminal audio experience
         </p>
+
+        {/* ── Live Cyber Clock ── */}
+        <div className="mt-3 flex justify-center">
+          <CyberClock />
+        </div>
       </div>
 
       {/* ── Main Indigo OS Player Window ── */}
@@ -607,6 +614,19 @@ export default function PortalAudioOS() {
             </div>
           </div>
         </WindowFrame>
+
+        {/* ── Mood Bot Companion ── */}
+        <div className="mt-2">
+          <MoodBot
+            isPlaying={isPlaying}
+            isPaused={!isPlaying && !!currentSong}
+            isLoading={loading}
+            hasError={!!audioError}
+            isShuffle={isShuffle}
+            hasSong={!!currentSong}
+            progress={duration > 0 ? currentTime / duration : 0}
+          />
+        </div>
 
         {/* Vertical Dashed Connector Line */}
         <div className="flex flex-col items-center my-1 select-none pointer-events-none">
