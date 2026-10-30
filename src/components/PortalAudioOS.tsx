@@ -17,6 +17,7 @@ import {
   ChevronUp,
   Check,
   Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import type { Song } from '@/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -31,7 +32,8 @@ import TickerStrip from './TickerStrip';
 import HalftoneImage from './HalftoneImage';
 
 export default function PortalAudioOS() {
-  const [songs, setSongs] = useState<Song[]>([]);
+  const [cloudSongs, setCloudSongs] = useState<Song[]>([]);
+  const [libraryMode, setLibraryMode] = useState<'cloud' | 'demos'>('cloud');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showTracklist, setShowTracklist] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
@@ -39,6 +41,12 @@ export default function PortalAudioOS() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+
+  // Active playlist based on mode
+  const songs =
+    libraryMode === 'cloud' && cloudSongs.length > 0
+      ? cloudSongs
+      : FALLBACK_TRACKS;
 
   const {
     isPlaying,
@@ -48,6 +56,7 @@ export default function PortalAudioOS() {
     isShuffle,
     repeatMode,
     analyserNode,
+    audioError,
     togglePlay,
     next,
     previous,
@@ -56,6 +65,7 @@ export default function PortalAudioOS() {
     toggleShuffle,
     cycleRepeat,
     loadTrack,
+    loadCustomSource,
   } = useAudioPlayer(songs, currentIndex, setCurrentIndex);
 
   // Fetch songs from Supabase or use fallback
@@ -63,21 +73,35 @@ export default function PortalAudioOS() {
     setLoading(true);
     if (isSupabaseConfigured && supabase) {
       try {
+        console.log('[Portal OS] Fetching songs from Supabase...');
         const { data, error } = await supabase
           .from('songs')
           .select('*')
           .order('created_at', { ascending: false });
-        if (error) throw error;
-        if (data && data.length > 0) {
-          setSongs(data as Song[]);
-        } else {
-          setSongs(FALLBACK_TRACKS);
+
+        if (error) {
+          console.error('[Portal OS] Supabase error:', error);
+          throw error;
         }
-      } catch {
-        setSongs(FALLBACK_TRACKS);
+
+        console.log('[Portal OS] Received songs from Supabase:', data);
+        if (data && data.length > 0) {
+          setCloudSongs(data as Song[]);
+          setLibraryMode('cloud');
+        } else {
+          console.log('[Portal OS] Supabase returned 0 rows, showing sample tracks.');
+          setCloudSongs([]);
+          setLibraryMode('demos');
+        }
+      } catch (err) {
+        console.error('[Portal OS] Failed to query Supabase, falling back to samples:', err);
+        setCloudSongs([]);
+        setLibraryMode('demos');
       }
     } else {
-      setSongs(FALLBACK_TRACKS);
+      console.warn('[Portal OS] Supabase not configured in client environment, showing fallback tracks.');
+      setCloudSongs([]);
+      setLibraryMode('demos');
     }
     setLoading(false);
   }, []);
@@ -133,14 +157,15 @@ export default function PortalAudioOS() {
 
   // Instant local state update when song is purged
   const handleDeleteSuccess = (deletedId: string) => {
-    setSongs((prev) => {
-      const newSongs = prev.filter((s) => s.id !== deletedId);
-      if (newSongs.length === 0) {
+    setCloudSongs((prev) => {
+      const remaining = prev.filter((s) => s.id !== deletedId);
+      if (remaining.length === 0) {
+        setLibraryMode('demos');
         setCurrentIndex(0);
-      } else if (currentIndex >= newSongs.length) {
-        setCurrentIndex(Math.max(0, newSongs.length - 1));
+      } else if (currentIndex >= remaining.length) {
+        setCurrentIndex(Math.max(0, remaining.length - 1));
       }
-      return newSongs;
+      return remaining;
     });
   };
 
@@ -243,6 +268,42 @@ export default function PortalAudioOS() {
                 PORTAL // 44.1kHz
               </span>
             </div>
+
+            {/* Audio Stream Error Banner Overlay */}
+            {audioError && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-xs p-4 text-center border-2 border-red-500/80">
+                <div className="flex items-center gap-1.5 text-red-400 mb-1">
+                  <AlertTriangle size={16} className="animate-pulse" />
+                  <span className="font-orbitron text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase">
+                    AUDIO STREAM OFFLINE // 404
+                  </span>
+                </div>
+                <p className="font-space-mono text-[9px] text-white/80 max-w-xs mb-3">
+                  {audioError}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => loadCustomSource('/audio/neon-drift.wav')}
+                    className="font-space-mono border border-green-400 bg-green-500/25 px-2.5 py-1.5 text-[8px] font-bold tracking-[0.15em] text-green-300 uppercase hover:bg-green-500/40 transition-colors cursor-pointer"
+                  >
+                    ▶ PLAY SYNTH DEMO AUDIO
+                  </button>
+                  {currentSong && !currentSong.id.startsWith('fallback-') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSongToDelete(currentSong);
+                        setShowDeleteModal(true);
+                      }}
+                      className="font-space-mono border border-red-400 bg-red-500/25 px-2.5 py-1.5 text-[8px] tracking-[0.15em] text-red-300 uppercase hover:bg-red-500/40 transition-colors cursor-pointer"
+                    >
+                      PURGE BROKEN RECORD
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Track Info Overlay (Bottom) */}
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#1B1464]/95 via-[#3A30D8]/70 to-transparent px-4 pb-3 pt-10">
@@ -426,26 +487,53 @@ export default function PortalAudioOS() {
             noPadding
             className="overflow-hidden shadow-xl"
           >
-            {/* Drawer Header Toggle */}
-            <button
-              onClick={() => setShowTracklist(!showTracklist)}
-              className="font-space-mono flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-4 py-2.5 text-[10px] tracking-[0.2em] text-white/80 uppercase transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                <span className="h-1.5 w-1.5 bg-white/70" />
-                <span>
-                  {songs.length} TRACK{songs.length !== 1 ? 'S' : ''} ARCHIVED
-                </span>
+            {/* Drawer Header Toggle & Vault/Demo Switcher */}
+            <div className="flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-3 py-2">
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLibraryMode('cloud');
+                    setCurrentIndex(0);
+                  }}
+                  className={`font-space-mono text-[8px] sm:text-[9px] px-2 py-0.5 border tracking-[0.1em] cursor-pointer transition-all ${
+                    libraryMode === 'cloud'
+                      ? 'border-green-400 bg-green-500/20 text-green-300 font-bold'
+                      : 'border-white/20 text-white/50 hover:text-white hover:border-white/40'
+                  }`}
+                  title="Switch to Cloud Supabase Vault"
+                >
+                  ● CLOUD VAULT ({cloudSongs.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLibraryMode('demos');
+                    setCurrentIndex(0);
+                  }}
+                  className={`font-space-mono text-[8px] sm:text-[9px] px-2 py-0.5 border tracking-[0.1em] cursor-pointer transition-all ${
+                    libraryMode === 'demos'
+                      ? 'border-indigo-400 bg-indigo-500/30 text-indigo-200 font-bold'
+                      : 'border-white/20 text-white/50 hover:text-white hover:border-white/40'
+                  }`}
+                  title="Switch to Built-in Synthwave Demos"
+                >
+                  SYNTH DEMOS ({FALLBACK_TRACKS.length})
+                </button>
               </div>
-              <div className="flex items-center gap-1 text-white/60">
+              <button
+                type="button"
+                onClick={() => setShowTracklist(!showTracklist)}
+                className="font-space-mono flex items-center gap-1 text-[8px] sm:text-[9px] tracking-[0.15em] text-white/60 hover:text-white cursor-pointer px-1 py-0.5"
+              >
                 <span>{showTracklist ? 'COLLAPSE' : 'EXPAND'}</span>
                 {showTracklist ? (
                   <ChevronUp size={13} />
                 ) : (
                   <ChevronDown size={13} />
                 )}
-              </div>
-            </button>
+              </button>
+            </div>
 
             {/* Expandable list */}
             {showTracklist && (
@@ -481,7 +569,11 @@ export default function PortalAudioOS() {
       <UploadModal
         isOpen={showUpload}
         onClose={() => setShowUpload(false)}
-        onUploadComplete={fetchSongs}
+        onUploadComplete={() => {
+          fetchSongs();
+          setLibraryMode('cloud');
+          setCurrentIndex(0);
+        }}
       />
 
       {/* ── Secure Delete Track Modal ── */}

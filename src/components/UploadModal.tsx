@@ -289,15 +289,22 @@ export default function UploadModal({
     setProgress(0);
 
     try {
-      // 1. Verify Admin PIN (client-side check against env with fallback to '2026')
-      const expectedPin = process.env.NEXT_PUBLIC_ADMIN_PIN || '2026';
-      if (pin.trim() !== expectedPin) {
-        throw new Error(`Invalid Admin PIN. (Default: 2026)`);
+      // 1. Verify Admin PIN (accept env pin, suprith2030, or default 2026)
+      const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
+        .replace(/^["']|["']$/g, '')
+        .trim();
+      const entered = pin.trim();
+      if (entered !== expectedPin && entered !== '2026' && entered !== 'suprith2030') {
+        throw new Error('Invalid Admin PIN. Security check rejected.');
       }
 
       // 2. Validate Cloudinary configuration
-      const cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME;
-      const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET;
+      const cloudName = (process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '')
+        .replace(/^["']|["']$/g, '')
+        .trim();
+      const uploadPreset = (process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || '')
+        .replace(/^["']|["']$/g, '')
+        .trim();
 
       if (!cloudName || !uploadPreset) {
         throw new Error(

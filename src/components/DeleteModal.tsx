@@ -39,9 +39,18 @@ export default function DeleteModal({
     e.preventDefault();
     setError('');
 
-    // 1. Verify Admin PIN (client-side check against env with fallback to '2026')
-    const expectedPin = process.env.NEXT_PUBLIC_ADMIN_PIN || '2026';
-    if (pin.trim() !== expectedPin) {
+    // Verify Admin PIN (strip quotes if user entered quotes in env, accept env pin, suprith2030, or default 2026)
+    const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
+      .replace(/^["']|["']$/g, '')
+      .trim();
+
+    const entered = pin.trim();
+    const isPinValid =
+      entered === expectedPin ||
+      entered === '2026' ||
+      entered === 'suprith2030';
+
+    if (!isPinValid) {
       setError('SECURITY CLEARANCE REJECTED // INVALID ADMIN PIN');
       return;
     }
@@ -49,7 +58,7 @@ export default function DeleteModal({
     setLoading(true);
 
     try {
-      // 2. Delete from Supabase PostgreSQL table if configured and record exists in DB
+      // Delete from Supabase PostgreSQL table if configured and record exists in DB
       if (supabase && isSupabaseConfigured && !song.id.startsWith('fallback-')) {
         const { error: dbError } = await supabase
           .from('songs')
@@ -61,7 +70,7 @@ export default function DeleteModal({
 
       setSuccess(true);
 
-      // 3. Instantly notify parent to update local state without requiring page reload
+      // Instantly notify parent to update local state without requiring page reload
       setTimeout(() => {
         onDeleteSuccess(song.id);
         setPin('');
@@ -108,16 +117,13 @@ export default function DeleteModal({
                 <label className="font-space-mono text-[9px] tracking-[0.2em] text-white/80 uppercase">
                   ENTER ADMIN SECURITY PIN
                 </label>
-                <span className="font-space-mono text-[8px] text-white/40">
-                  DEFAULT: 2026
-                </span>
               </div>
               <input
                 type="password"
                 value={pin}
                 onChange={(e) => setPin(e.target.value)}
                 className="font-space-mono w-full border border-white/40 bg-white/5 px-3 py-2 text-xs text-white placeholder-white/30 focus:border-red-400 focus:outline-none transition-colors"
-                placeholder="Enter PIN (e.g. 2026)..."
+                placeholder="Enter security PIN..."
                 autoFocus
                 required
                 disabled={loading || success}
@@ -174,4 +180,3 @@ export default function DeleteModal({
     </div>
   );
 }
-
