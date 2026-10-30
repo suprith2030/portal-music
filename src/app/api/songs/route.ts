@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 function getServerSupabase() {
   const rawUrl =
     process.env.NEXT_PUBLIC_SUPABASE_URL ||
@@ -28,10 +31,15 @@ function getAdminPin(): string {
   return raw.replace(/^["']|["']$/g, '').trim();
 }
 
+function isValidUUID(str?: string | null): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+}
+
 // GET /api/songs - Fetch all songs or verify PIN
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
+    const searchParams = request.nextUrl.searchParams;
 
     // Optional PIN verification endpoint: /api/songs?action=verify-pin&pin=...
     if (searchParams.get('action') === 'verify-pin') {
@@ -101,11 +109,11 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/songs - Insert or update song with strict PIN verification & deduplication
+// POST /api/songs - Insert/Update song OR Purge song (via action: 'delete')
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { title, artist, album, duration, audio_url, cover_url, pin } = body;
+    const { action, title, artist, album, duration, audio_url, cover_url, pin, id } = body;
 
     // 1. Strict Security PIN verification
     const expectedPin = getAdminPin();
@@ -115,14 +123,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'INVALID SECURITY PIN. ACCESS DENIED.' },
         { status: 401 }
-      );
-    }
-
-    // 2. Validate payload
-    if (!title || !audio_url) {
-      return NextResponse.json(
-        { error: 'Title and audio_url are required.' },
-        { status: 400 }
       );
     }
 
@@ -137,6 +137,70 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // ── Handle Action: DELETE (via robust POST method) ──
+    if (action === 'delete') {
+      let totalDeleted = 0;
+
+      // 1. Delete by UUID if valid
+      if (isValidUUID(id)) {
+        const { data: delById, error: errById } = await supabase
+          .from('songs')
+          .delete()
+          .eq('id', id.trim())
+          .select();
+
+        if (errById) {
+          console.warn('Purge by ID warning:', errById.message);
+        } else if (delById) {
+          totalDeleted += delById.length;
+        }
+      }
+
+      // 2. Also delete any duplicate rows with same Title & Artist
+      if (title && artist) {
+        const { data: delByTitle, error: errByTitle } = await supabase
+          .from('songs')
+          .delete()
+          .ilike('title', String(title).trim())
+          .ilike('artist', String(artist).trim())
+          .select();
+
+        if (errByTitle) {
+          console.warn('Purge by title/artist warning:', errByTitle.message);
+        } else if (delByTitle) {
+          totalDeleted += delByTitle.length;
+        }
+      }
+
+      // 3. Also delete by audio_url if provided
+      if (audio_url) {
+        const { data: delByAudio } = await supabase
+          .from('songs')
+          .delete()
+          .eq('audio_url', String(audio_url).trim())
+          .select();
+
+        if (delByAudio) {
+          totalDeleted += delByAudio.length;
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        action: 'delete',
+        deletedCount: totalDeleted,
+        deletedId: id,
+      });
+    }
+
+    // ── Handle Action: INSERT / UPDATE (Upload) ──
+    if (!title || !audio_url) {
+      return NextResponse.json(
+        { error: 'Title and audio_url are required.' },
+        { status: 400 }
+      );
+    }
+
     const trimmedTitle = String(title).trim();
     const trimmedArtist = String(artist || 'Unknown Artist').trim();
     const trimmedAlbum = String(album || 'Single').trim();
@@ -144,7 +208,7 @@ export async function POST(request: NextRequest) {
     const trimmedAudioUrl = String(audio_url).trim();
     const trimmedCoverUrl = String(cover_url || '').trim();
 
-    // 3. Deduplication Check: Look for existing track with same Title & Artist
+    // Deduplication Check: Look for existing track with same Title & Artist
     const { data: existingSongs, error: searchError } = await supabase
       .from('songs')
       .select('id, title, artist')
@@ -220,11 +284,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE /api/songs - Purge a song record by ID with strict PIN verification
+// DELETE /api/songs - Purge a song record by ID/Title with strict PIN verification
 export async function DELETE(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
+    const searchParams = request.nextUrl.searchParams;
     const id = searchParams.get('id');
+    const title = searchParams.get('title');
+    const artist = searchParams.get('artist');
     const pin = searchParams.get('pin') || request.headers.get('x-admin-pin') || '';
 
     // 1. Strict Security PIN verification
@@ -238,9 +304,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    if (!id) {
+    if (!id && !title) {
       return NextResponse.json(
-        { error: 'Song ID is required for deletion.' },
+        { error: 'Song ID or Title is required for deletion.' },
         { status: 400 }
       );
     }
@@ -253,17 +319,38 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const { error } = await supabase.from('songs').delete().eq('id', id);
+    let deletedCount = 0;
 
-    if (error) {
-      console.error('Supabase delete error in /api/songs:', error);
-      return NextResponse.json(
-        { error: `Database error: ${error.message}` },
-        { status: 500 }
-      );
+    // Purge by UUID if valid
+    if (isValidUUID(id)) {
+      const { data: delById, error: errById } = await supabase
+        .from('songs')
+        .delete()
+        .eq('id', (id || '').trim())
+        .select();
+
+      if (errById) {
+        console.warn('DELETE route by ID warning:', errById.message);
+      } else if (delById) {
+        deletedCount += delById.length;
+      }
     }
 
-    return NextResponse.json({ success: true, deletedId: id });
+    // Also purge all duplicates by title & artist if provided
+    if (title && artist) {
+      const { data: delByTitle } = await supabase
+        .from('songs')
+        .delete()
+        .ilike('title', title.trim())
+        .ilike('artist', artist.trim())
+        .select();
+
+      if (delByTitle) {
+        deletedCount += delByTitle.length;
+      }
+    }
+
+    return NextResponse.json({ success: true, deletedId: id, deletedCount });
   } catch (err) {
     console.error('Server error in /api/songs DELETE:', err);
     return NextResponse.json(

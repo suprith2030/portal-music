@@ -209,10 +209,14 @@ export default function PortalAudioOS() {
     setShowDeleteModal(true);
   };
 
-  // Handle successful deletion: instantly remove from state and adjust player
-  const handleDeleteSuccess = (deletedSongId: string) => {
+  // Handle successful deletion: instantly remove from state and re-sync with database
+  const handleDeleteSuccess = (deletedSongId: string, deletedTitle?: string) => {
     setSongs((prev) => {
-      const updated = prev.filter((s) => s.id !== deletedSongId);
+      const updated = prev.filter(
+        (s) =>
+          s.id !== deletedSongId &&
+          (!deletedTitle || s.title.toLowerCase() !== deletedTitle.toLowerCase())
+      );
 
       if (updated.length === 0) {
         setCurrentIndex(0);
@@ -232,6 +236,11 @@ export default function PortalAudioOS() {
       }
       return updated;
     });
+
+    // Re-verify and sync fresh state from database
+    setTimeout(() => {
+      fetchSongs();
+    }, 600);
   };
 
   const repeatIcon = () => {
