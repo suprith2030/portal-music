@@ -1,10 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const rawKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+const rawKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
 
-// Clean any surrounding quotes, whitespace, or trailing slashes
-const supabaseUrl = rawUrl.replace(/^["']|["']$/g, '').replace(/\/$/, '').trim();
+const supabaseUrl = rawUrl.replace(/^["']|["']$/g, '').trim();
 const supabaseAnonKey = rawKey.replace(/^["']|["']$/g, '').trim();
 
 export const isSupabaseConfigured =

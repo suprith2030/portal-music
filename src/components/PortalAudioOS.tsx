@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Play,
   Pause,
@@ -16,8 +16,9 @@ import {
   ChevronDown,
   ChevronUp,
   Check,
+  Search,
   Trash2,
-  AlertTriangle,
+  X,
 } from 'lucide-react';
 import type { Song } from '@/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -27,26 +28,28 @@ import WindowFrame from './WindowFrame';
 import SineWaveVisualizer from './SineWaveVisualizer';
 import TrackList from './TrackList';
 import UploadModal from './UploadModal';
-import DeleteModal from './DeleteModal';
+import DeleteTrackModal from './DeleteTrackModal';
 import TickerStrip from './TickerStrip';
 import HalftoneImage from './HalftoneImage';
 
+// Helper to sort songs alphabetically by title
+const sortAlphabetical = (trackList: Song[]): Song[] =>
+  [...trackList].sort((a, b) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: 'base' })
+  );
+
 export default function PortalAudioOS() {
-  const [cloudSongs, setCloudSongs] = useState<Song[]>([]);
-  const [libraryMode, setLibraryMode] = useState<'cloud' | 'demos'>('cloud');
+  const [songs, setSongs] = useState<Song[]>(() => sortAlphabetical(FALLBACK_TRACKS));
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showTracklist, setShowTracklist] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
-  const [songToDelete, setSongToDelete] = useState<Song | null>(null);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Active playlist based on mode
-  const songs =
-    libraryMode === 'cloud' && cloudSongs.length > 0
-      ? cloudSongs
-      : FALLBACK_TRACKS;
+  // Delete modal state
+  const [songToDelete, setSongToDelete] = useState<Song | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const {
     isPlaying,
@@ -56,8 +59,8 @@ export default function PortalAudioOS() {
     isShuffle,
     repeatMode,
     analyserNode,
-    audioError,
     togglePlay,
+    pause,
     next,
     previous,
     seek,
@@ -65,43 +68,29 @@ export default function PortalAudioOS() {
     toggleShuffle,
     cycleRepeat,
     loadTrack,
-    loadCustomSource,
   } = useAudioPlayer(songs, currentIndex, setCurrentIndex);
 
-  // Fetch songs from Supabase or use fallback
+  // Fetch songs from Supabase or fallback and sort alphabetically
   const fetchSongs = useCallback(async () => {
     setLoading(true);
     if (isSupabaseConfigured && supabase) {
       try {
-        console.log('[Portal OS] Fetching songs from Supabase...');
         const { data, error } = await supabase
           .from('songs')
           .select('*')
-          .order('created_at', { ascending: false });
+          .order('title', { ascending: true });
 
-        if (error) {
-          console.error('[Portal OS] Supabase error:', error);
-          throw error;
-        }
-
-        console.log('[Portal OS] Received songs from Supabase:', data);
+        if (error) throw error;
         if (data && data.length > 0) {
-          setCloudSongs(data as Song[]);
-          setLibraryMode('cloud');
+          setSongs(sortAlphabetical(data as Song[]));
         } else {
-          console.log('[Portal OS] Supabase returned 0 rows, showing sample tracks.');
-          setCloudSongs([]);
-          setLibraryMode('demos');
+          setSongs(sortAlphabetical(FALLBACK_TRACKS));
         }
-      } catch (err) {
-        console.error('[Portal OS] Failed to query Supabase, falling back to samples:', err);
-        setCloudSongs([]);
-        setLibraryMode('demos');
+      } catch {
+        setSongs(sortAlphabetical(FALLBACK_TRACKS));
       }
     } else {
-      console.warn('[Portal OS] Supabase not configured in client environment, showing fallback tracks.');
-      setCloudSongs([]);
-      setLibraryMode('demos');
+      setSongs(sortAlphabetical(FALLBACK_TRACKS));
     }
     setLoading(false);
   }, []);
@@ -132,6 +121,18 @@ export default function PortalAudioOS() {
 
   const currentSong = songs[currentIndex] ?? null;
 
+  // Real-time filtered search list
+  const filteredSongs = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return songs;
+    return songs.filter(
+      (s) =>
+        s.title.toLowerCase().includes(q) ||
+        s.artist.toLowerCase().includes(q) ||
+        (s.album && s.album.toLowerCase().includes(q))
+    );
+  }, [songs, searchQuery]);
+
   const formatTime = (t: number) => {
     if (!isFinite(t) || t < 0) return '0:00';
     const m = Math.floor(t / 60);
@@ -151,21 +152,44 @@ export default function PortalAudioOS() {
     }
   };
 
-  const handleSelectTrack = (index: number) => {
-    setCurrentIndex(index);
+  // Map filtered track selection back to main sorted songs array
+  const handleSelectFilteredTrack = (filteredIdx: number) => {
+    const target = filteredSongs[filteredIdx];
+    if (!target) return;
+    const originalIdx = songs.findIndex((s) => s.id === target.id);
+    if (originalIdx >= 0) {
+      setCurrentIndex(originalIdx);
+    }
   };
 
-  // Instant local state update when song is purged
-  const handleDeleteSuccess = (deletedId: string) => {
-    setCloudSongs((prev) => {
-      const remaining = prev.filter((s) => s.id !== deletedId);
-      if (remaining.length === 0) {
-        setLibraryMode('demos');
+  // Trigger delete modal for a track
+  const handleRequestDelete = (song: Song) => {
+    setSongToDelete(song);
+    setShowDeleteModal(true);
+  };
+
+  // Handle successful deletion: instantly remove from state and adjust player
+  const handleDeleteSuccess = (deletedSongId: string) => {
+    setSongs((prev) => {
+      const updated = prev.filter((s) => s.id !== deletedSongId);
+
+      if (updated.length === 0) {
         setCurrentIndex(0);
-      } else if (currentIndex >= remaining.length) {
-        setCurrentIndex(Math.max(0, remaining.length - 1));
+        pause();
+      } else if (songs[currentIndex]?.id === deletedSongId) {
+        // If active track was deleted, advance or fall back to last track
+        const nextIdx = Math.min(currentIndex, updated.length - 1);
+        setCurrentIndex(nextIdx);
+        loadTrack(updated[nextIdx]);
+      } else {
+        // Recalculate current index in the updated list
+        const activeId = songs[currentIndex]?.id;
+        const newIdx = updated.findIndex((s) => s.id === activeId);
+        if (newIdx >= 0) {
+          setCurrentIndex(newIdx);
+        }
       }
-      return remaining;
+      return updated;
     });
   };
 
@@ -257,7 +281,11 @@ export default function PortalAudioOS() {
             </div>
 
             <div className="absolute top-2 left-2 flex items-center gap-1.5 border border-white/30 bg-[#3A30D8]/80 px-2 py-0.5">
-              <span className={`h-1.5 w-1.5 rounded-none ${isPlaying ? 'bg-green-400 animate-ping' : 'bg-white/50'}`} />
+              <span
+                className={`h-1.5 w-1.5 rounded-none ${
+                  isPlaying ? 'bg-green-400 animate-ping' : 'bg-white/50'
+                }`}
+              />
               <span className="font-space-mono text-[8px] tracking-[0.15em] text-white uppercase">
                 {isPlaying ? 'ACTIVE STREAM' : 'IDLE WAVE'}
               </span>
@@ -265,47 +293,10 @@ export default function PortalAudioOS() {
 
             <div className="absolute top-2 right-2 border border-white/30 bg-[#3A30D8]/80 px-2 py-0.5">
               <span className="font-space-mono text-[8px] tracking-[0.15em] text-white/80 uppercase">
-                PORTAL // 44.1kHz
+                PORTAL // A-Z SORTED
               </span>
             </div>
 
-            {/* Audio Stream Error Banner Overlay */}
-            {audioError && (
-              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/85 backdrop-blur-xs p-4 text-center border-2 border-red-500/80">
-                <div className="flex items-center gap-1.5 text-red-400 mb-1">
-                  <AlertTriangle size={16} className="animate-pulse" />
-                  <span className="font-orbitron text-[11px] sm:text-xs font-bold tracking-[0.2em] uppercase">
-                    AUDIO STREAM OFFLINE // 404
-                  </span>
-                </div>
-                <p className="font-space-mono text-[9px] text-white/80 max-w-xs mb-3">
-                  {audioError}
-                </p>
-                <div className="flex flex-wrap items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => loadCustomSource('/audio/neon-drift.wav')}
-                    className="font-space-mono border border-green-400 bg-green-500/25 px-2.5 py-1.5 text-[8px] font-bold tracking-[0.15em] text-green-300 uppercase hover:bg-green-500/40 transition-colors cursor-pointer"
-                  >
-                    ▶ PLAY SYNTH DEMO AUDIO
-                  </button>
-                  {currentSong && !currentSong.id.startsWith('fallback-') && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSongToDelete(currentSong);
-                        setShowDeleteModal(true);
-                      }}
-                      className="font-space-mono border border-red-400 bg-red-500/25 px-2.5 py-1.5 text-[8px] tracking-[0.15em] text-red-300 uppercase hover:bg-red-500/40 transition-colors cursor-pointer"
-                    >
-                      PURGE BROKEN RECORD
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* Track Info Overlay (Bottom) */}
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-[#1B1464]/95 via-[#3A30D8]/70 to-transparent px-4 pb-3 pt-10">
               <div className="flex items-end justify-between gap-2">
                 <div className="min-w-0 flex-1">
@@ -317,7 +308,10 @@ export default function PortalAudioOS() {
                   </p>
                 </div>
                 <div className="font-space-mono text-[10px] tracking-[0.15em] text-white/50 shrink-0">
-                  {formatTime(currentTime)} / {duration > 0 ? formatTime(duration) : (currentSong?.duration || '0:00')}
+                  {formatTime(currentTime)} /{' '}
+                  {duration > 0
+                    ? formatTime(duration)
+                    : currentSong?.duration || '0:00'}
                 </div>
               </div>
             </div>
@@ -337,7 +331,11 @@ export default function PortalAudioOS() {
             <div className="font-space-mono mt-1.5 flex justify-between text-[9px] tracking-[0.15em] text-white/60">
               <span>{formatTime(currentTime)}</span>
               <span className="text-white/40">// TIMELINE SCRUB //</span>
-              <span>{duration > 0 ? formatTime(duration) : (currentSong?.duration || '0:00')}</span>
+              <span>
+                {duration > 0
+                  ? formatTime(duration)
+                  : currentSong?.duration || '0:00'}
+              </span>
             </div>
           </div>
 
@@ -367,7 +365,7 @@ export default function PortalAudioOS() {
 
             <button
               onClick={togglePlay}
-              className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center border-2 border-white bg-white/15 text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all hover:bg-white/30 hover:scale-105 active:scale-95 cursor-pointer"
+              className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center border-2 border-white bg-white/15 text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all hover:bg-white/30 hover:scale-105 active:scale-95"
               title={isPlaying ? 'Pause' : 'Play'}
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
@@ -399,7 +397,6 @@ export default function PortalAudioOS() {
 
           {/* Volume + Utility Action Bar */}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/20 pt-3">
-            {/* Volume control */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setVolume(volume > 0 ? 0 : 0.7)}
@@ -423,29 +420,23 @@ export default function PortalAudioOS() {
               </span>
             </div>
 
-            {/* Right utility buttons */}
             <div className="flex items-center gap-2">
-              {/* Delete Active Track Button */}
+              {/* Purge current song button */}
               {currentSong && (
                 <button
-                  type="button"
-                  onClick={() => {
-                    setSongToDelete(currentSong);
-                    setShowDeleteModal(true);
-                  }}
-                  className="font-space-mono flex items-center gap-1 border border-white/25 bg-white/5 px-2 py-1.5 text-[9px] tracking-[0.1em] text-white/60 uppercase transition-all hover:border-red-400 hover:bg-red-500/15 hover:text-red-300 cursor-pointer"
-                  title="Purge active song (Requires Admin PIN)"
+                  onClick={() => handleRequestDelete(currentSong)}
+                  className="font-space-mono flex items-center gap-1 border border-red-400/40 bg-red-900/20 px-2 py-1.5 text-[9px] tracking-[0.1em] text-red-200 uppercase transition-all hover:border-red-400 hover:bg-red-800/40"
+                  title="Purge current track record"
                 >
-                  <Trash2 size={11} />
-                  <span className="hidden sm:inline">PURGE</span>
+                  <Trash2 size={11} className="text-red-300" />
+                  PURGE
                 </button>
               )}
 
               {/* Share link button */}
               <button
-                type="button"
                 onClick={handleShare}
-                className="font-space-mono flex items-center gap-1.5 border border-white/30 bg-white/5 px-2.5 py-1.5 text-[9px] tracking-[0.15em] text-white/80 uppercase transition-all hover:bg-white/15 hover:text-white hover:border-white/60 cursor-pointer"
+                className="font-space-mono flex items-center gap-1.5 border border-white/30 bg-white/5 px-2.5 py-1.5 text-[9px] tracking-[0.15em] text-white/80 uppercase transition-all hover:bg-white/15 hover:text-white hover:border-white/60"
                 title="Copy shareable portal link"
               >
                 {copied ? (
@@ -463,9 +454,8 @@ export default function PortalAudioOS() {
 
               {/* Upload trigger */}
               <button
-                type="button"
                 onClick={() => setShowUpload(true)}
-                className="font-space-mono flex items-center gap-1.5 border border-white/50 bg-[#463DF5] px-2.5 py-1.5 text-[9px] font-bold tracking-[0.15em] text-white uppercase transition-all hover:bg-white hover:text-[#463DF5] cursor-pointer"
+                className="font-space-mono flex items-center gap-1.5 border border-white/50 bg-[#463DF5] px-2.5 py-1.5 text-[9px] font-bold tracking-[0.15em] text-white uppercase transition-all hover:bg-white hover:text-[#463DF5]"
               >
                 <Plus size={11} />
                 + UPLOAD
@@ -483,77 +473,76 @@ export default function PortalAudioOS() {
         {/* Tracklist Drawer Window */}
         <div>
           <WindowFrame
-            title="TRACKLIST DRAWER"
+            title="TRACKLIST ARCHIVE // A-Z"
             noPadding
             className="overflow-hidden shadow-xl"
           >
-            {/* Drawer Header Toggle & Vault/Demo Switcher */}
-            <div className="flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-3 py-2">
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLibraryMode('cloud');
-                    setCurrentIndex(0);
-                  }}
-                  className={`font-space-mono text-[8px] sm:text-[9px] px-2 py-0.5 border tracking-[0.1em] cursor-pointer transition-all ${
-                    libraryMode === 'cloud'
-                      ? 'border-green-400 bg-green-500/20 text-green-300 font-bold'
-                      : 'border-white/20 text-white/50 hover:text-white hover:border-white/40'
-                  }`}
-                  title="Switch to Cloud Supabase Vault"
-                >
-                  ● CLOUD VAULT ({cloudSongs.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLibraryMode('demos');
-                    setCurrentIndex(0);
-                  }}
-                  className={`font-space-mono text-[8px] sm:text-[9px] px-2 py-0.5 border tracking-[0.1em] cursor-pointer transition-all ${
-                    libraryMode === 'demos'
-                      ? 'border-indigo-400 bg-indigo-500/30 text-indigo-200 font-bold'
-                      : 'border-white/20 text-white/50 hover:text-white hover:border-white/40'
-                  }`}
-                  title="Switch to Built-in Synthwave Demos"
-                >
-                  SYNTH DEMOS ({FALLBACK_TRACKS.length})
-                </button>
+            {/* Drawer Header Toggle */}
+            <button
+              onClick={() => setShowTracklist(!showTracklist)}
+              className="font-space-mono flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-4 py-2.5 text-[10px] tracking-[0.2em] text-white/80 uppercase transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <div className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 bg-white/70" />
+                <span>
+                  {songs.length} TRACK{songs.length !== 1 ? 'S' : ''} ARCHIVED
+                </span>
+                {searchQuery && (
+                  <span className="text-indigo-300 text-[9px]">
+                    ({filteredSongs.length} MATCHING)
+                  </span>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => setShowTracklist(!showTracklist)}
-                className="font-space-mono flex items-center gap-1 text-[8px] sm:text-[9px] tracking-[0.15em] text-white/60 hover:text-white cursor-pointer px-1 py-0.5"
-              >
+              <div className="flex items-center gap-1 text-white/60">
                 <span>{showTracklist ? 'COLLAPSE' : 'EXPAND'}</span>
                 {showTracklist ? (
                   <ChevronUp size={13} />
                 ) : (
                   <ChevronDown size={13} />
                 )}
-              </button>
-            </div>
+              </div>
+            </button>
 
-            {/* Expandable list */}
+            {/* Expandable Track Search & List */}
             {showTracklist && (
-              <div className="max-h-64 overflow-y-auto">
-                {loading ? (
-                  <div className="font-space-mono py-8 text-center text-[10px] tracking-[0.2em] text-white/50">
-                    SCANNING AUDIO CHANNELS...
-                  </div>
-                ) : (
-                  <TrackList
-                    songs={songs}
-                    currentIndex={currentIndex}
-                    isPlaying={isPlaying}
-                    onSelectTrack={handleSelectTrack}
-                    onDeleteTrack={(song) => {
-                      setSongToDelete(song);
-                      setShowDeleteModal(true);
-                    }}
+              <div>
+                {/* Search Bar Input */}
+                <div className="flex items-center gap-2 border-b border-white/20 bg-[#2A1FA8]/60 px-3.5 py-2">
+                  <Search size={13} className="text-white/60 shrink-0" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="SEARCH ARCHIVE // TITLE, ARTIST, ALBUM..."
+                    className="font-space-mono w-full bg-transparent text-[10px] tracking-[0.15em] text-white placeholder-white/40 focus:outline-none"
                   />
-                )}
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="text-white/50 hover:text-white flex items-center p-0.5"
+                      title="Clear search"
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="max-h-64 overflow-y-auto">
+                  {loading ? (
+                    <div className="font-space-mono py-8 text-center text-[10px] tracking-[0.2em] text-white/50">
+                      SCANNING AUDIO CHANNELS...
+                    </div>
+                  ) : (
+                    <TrackList
+                      songs={filteredSongs}
+                      currentIndex={currentIndex}
+                      isPlaying={isPlaying}
+                      onSelectTrack={handleSelectFilteredTrack}
+                      onRequestDelete={handleRequestDelete}
+                      currentSongId={currentSong?.id}
+                    />
+                  )}
+                </div>
               </div>
             )}
           </WindowFrame>
@@ -569,17 +558,13 @@ export default function PortalAudioOS() {
       <UploadModal
         isOpen={showUpload}
         onClose={() => setShowUpload(false)}
-        onUploadComplete={() => {
-          fetchSongs();
-          setLibraryMode('cloud');
-          setCurrentIndex(0);
-        }}
+        onUploadComplete={fetchSongs}
       />
 
       {/* ── Secure Delete Track Modal ── */}
-      <DeleteModal
-        isOpen={showDeleteModal}
+      <DeleteTrackModal
         song={songToDelete}
+        isOpen={showDeleteModal}
         onClose={() => {
           setShowDeleteModal(false);
           setSongToDelete(null);
