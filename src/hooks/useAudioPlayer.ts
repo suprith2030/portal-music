@@ -30,6 +30,7 @@ export default function useAudioPlayer(
 
   // Expose analyserNode directly as state-like value for canvas visualizer
   const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
+  const [audioError, setAudioError] = useState<string | null>(null);
 
   // Create the <audio> element once
   useEffect(() => {
@@ -44,14 +45,22 @@ export default function useAudioPlayer(
 
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const onDuration = () => setDuration(audio.duration || 0);
-    const onPlay = () => setIsPlaying(true);
+    const onPlay = () => {
+      setIsPlaying(true);
+      setAudioError(null);
+    };
     const onPause = () => setIsPlaying(false);
+    const onError = () => {
+      setIsPlaying(false);
+      setAudioError('REMOTE AUDIO NOT FOUND // FILE REMOVED FROM STORAGE');
+    };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
     audio.addEventListener('durationchange', onDuration);
     audio.addEventListener('loadedmetadata', onDuration);
     audio.addEventListener('play', onPlay);
     audio.addEventListener('pause', onPause);
+    audio.addEventListener('error', onError);
 
     return () => {
       audio.removeEventListener('timeupdate', onTimeUpdate);
@@ -59,6 +68,7 @@ export default function useAudioPlayer(
       audio.removeEventListener('loadedmetadata', onDuration);
       audio.removeEventListener('play', onPlay);
       audio.removeEventListener('pause', onPause);
+      audio.removeEventListener('error', onError);
       audio.pause();
       audio.src = '';
       if (
@@ -142,6 +152,7 @@ export default function useAudioPlayer(
   const loadTrack = useCallback((song: Song) => {
     const audio = audioRef.current;
     if (!audio) return;
+    setAudioError(null);
     if (song.audio_url && audio.src !== song.audio_url) {
       audio.src = song.audio_url;
       audio.load();
@@ -327,6 +338,8 @@ export default function useAudioPlayer(
     isShuffle,
     repeatMode,
     analyserNode,
+    audioError,
+    clearAudioError: () => setAudioError(null),
     play,
     pause,
     togglePlay,

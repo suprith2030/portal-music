@@ -19,6 +19,7 @@ import {
   Search,
   Trash2,
   X,
+  AlertTriangle,
 } from 'lucide-react';
 import type { Song } from '@/types';
 import { getSupabase } from '@/lib/supabase';
@@ -39,13 +40,14 @@ const sortAlphabetical = (trackList: Song[]): Song[] =>
   );
 
 export default function PortalAudioOS() {
-  const [songs, setSongs] = useState<Song[]>(() => sortAlphabetical(FALLBACK_TRACKS));
+  const [songs, setSongs] = useState<Song[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [showTracklist, setShowTracklist] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDemoMode, setIsDemoMode] = useState(false);
 
   // Delete modal state
   const [songToDelete, setSongToDelete] = useState<Song | null>(null);
@@ -59,6 +61,7 @@ export default function PortalAudioOS() {
     isShuffle,
     repeatMode,
     analyserNode,
+    audioError,
     togglePlay,
     pause,
     next,
@@ -70,17 +73,19 @@ export default function PortalAudioOS() {
     loadTrack,
   } = useAudioPlayer(songs, currentIndex, setCurrentIndex);
 
-  // Fetch songs from Supabase (server API route first, direct client fallback) or fallback tracks
+  // Fetch songs from Supabase or fallback
   const fetchSongs = useCallback(async () => {
     setLoading(true);
     let loadedSongs: Song[] | null = null;
+    let isConfiguredOnServer = false;
 
-    // 1. Primary: Server API route (bypasses client build-time env variable inlining issues on Vercel)
+    // 1. Primary: Server API route (runs server-side with direct env access)
     try {
       const res = await fetch('/api/songs', { cache: 'no-store' });
       if (res.ok) {
         const json = await res.json();
-        if (Array.isArray(json.songs) && json.songs.length > 0) {
+        isConfiguredOnServer = Boolean(json.isConfigured);
+        if (Array.isArray(json.songs)) {
           loadedSongs = json.songs as Song[];
         }
       }
@@ -89,7 +94,7 @@ export default function PortalAudioOS() {
     }
 
     // 2. Secondary fallback: Direct Supabase client query
-    if (!loadedSongs) {
+    if (!isConfiguredOnServer && !loadedSongs) {
       const client = getSupabase();
       if (client) {
         try {
@@ -98,8 +103,9 @@ export default function PortalAudioOS() {
             .select('*')
             .order('title', { ascending: true });
 
-          if (!error && data && data.length > 0) {
-            loadedSongs = data as Song[];
+          if (!error) {
+            isConfiguredOnServer = true;
+            loadedSongs = (data || []) as Song[];
           }
         } catch (e) {
           console.warn('Direct client Supabase query failed:', e);
@@ -107,15 +113,28 @@ export default function PortalAudioOS() {
       }
     }
 
-    // 3. Update state with retrieved database songs or default fallback tracks
-    if (loadedSongs && loadedSongs.length > 0) {
-      setSongs(sortAlphabetical(loadedSongs));
+    // 3. Update state
+    if (isConfiguredOnServer) {
+      // Database is online:
+      // If there are songs in DB, show them!
+      // If DB has 0 songs (e.g. after user deletes them), keep playlist at 0 tracks!
+      // Do NOT resurrect deleted songs or force sample tracks when user deleted their library!
+      setSongs(loadedSongs ? sortAlphabetical(loadedSongs) : []);
+      setIsDemoMode(false);
     } else {
+      // Offline fallback: Supabase env vars not set up yet
       setSongs(sortAlphabetical(FALLBACK_TRACKS));
+      setIsDemoMode(true);
     }
 
     setLoading(false);
   }, []);
+
+  const handleLoadDemoTracks = () => {
+    setSongs(sortAlphabetical(FALLBACK_TRACKS));
+    setCurrentIndex(0);
+    setIsDemoMode(true);
+  };
 
   useEffect(() => {
     fetchSongs();
@@ -315,7 +334,11 @@ export default function PortalAudioOS() {
 
             <div className="absolute top-2 right-2 border border-white/30 bg-[#3A30D8]/80 px-2 py-0.5">
               <span className="font-space-mono text-[8px] tracking-[0.15em] text-white/80 uppercase">
-                PORTAL // A-Z SORTED
+                {isDemoMode
+                  ? 'DEMO MODE // 3 SAMPLES'
+                  : songs.length === 0
+                  ? 'ARCHIVE // EMPTY'
+                  : `SUPABASE // ${songs.length} TRACKS`}
               </span>
             </div>
 
@@ -323,10 +346,10 @@ export default function PortalAudioOS() {
               <div className="flex items-end justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <h2 className="font-orbitron truncate text-lg sm:text-xl font-bold tracking-[0.2em] text-white uppercase drop-shadow-sm">
-                    {currentSong?.title ?? 'NO CARRIER'}
+                    {currentSong?.title ?? (songs.length === 0 ? 'NO TRACKS IN ARCHIVE' : 'NO CARRIER')}
                   </h2>
                   <p className="font-space-mono truncate text-[10px] tracking-[0.15em] text-white/70">
-                    {currentSong?.artist ?? '---'} // {currentSong?.album ?? '---'}
+                    {currentSong?.artist ?? (songs.length === 0 ? 'Upload music to begin' : '---')} // {currentSong?.album ?? '---'}
                   </p>
                 </div>
                 <div className="font-space-mono text-[10px] tracking-[0.15em] text-white/50 shrink-0">
@@ -339,6 +362,58 @@ export default function PortalAudioOS() {
             </div>
           </div>
 
+          {/* Audio Error Alert (e.g. if file was deleted from Cloudinary) */}
+          {audioError && currentSong && (
+            <div className="mb-3 border border-red-400 bg-red-950/80 p-2.5 flex items-center justify-between gap-2 text-white">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle size={15} className="text-red-400 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-orbitron text-[9px] font-bold text-red-200 uppercase tracking-[0.1em] truncate">
+                    REMOTE AUDIO FILE NOT FOUND
+                  </p>
+                  <p className="font-space-mono text-[8px] text-red-300/80 tracking-[0.05em] truncate">
+                    File was deleted from Cloudinary or remote link is dead.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleRequestDelete(currentSong)}
+                className="font-orbitron shrink-0 border border-red-400 bg-red-600/30 px-2 py-1 text-[8px] font-bold tracking-[0.15em] text-white hover:bg-red-600 transition-colors uppercase cursor-pointer"
+              >
+                PURGE RECORD
+              </button>
+            </div>
+          )}
+
+          {/* Empty Archive State Banner */}
+          {songs.length === 0 && !loading && (
+            <div className="mb-4 border border-white/30 bg-black/40 p-3.5 text-center">
+              <p className="font-orbitron text-[11px] font-bold tracking-[0.2em] text-white uppercase mb-1">
+                ARCHIVE IS EMPTY // 0 TRACKS IN DATABASE
+              </p>
+              <p className="font-space-mono text-[8px] tracking-[0.1em] text-white/60 mb-2.5">
+                All songs have been removed from Supabase. Upload a new song or load demo samples.
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowUpload(true)}
+                  className="font-orbitron border border-white bg-white/20 px-2.5 py-1 text-[9px] font-bold tracking-[0.15em] text-white hover:bg-white hover:text-[#463DF5] transition-all uppercase cursor-pointer"
+                >
+                  + INITIALIZE UPLOAD
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLoadDemoTracks}
+                  className="font-space-mono border border-white/40 bg-white/5 px-2.5 py-1 text-[8px] tracking-[0.1em] text-white/80 hover:bg-white/15 transition-all uppercase cursor-pointer"
+                >
+                  LOAD 3 DEMO TRACKS
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Timeline Scrubber */}
           <div className="mb-3 px-1">
             <input
@@ -347,7 +422,8 @@ export default function PortalAudioOS() {
               max={duration || 100}
               value={currentTime}
               onChange={(e) => seek(Number(e.target.value))}
-              className="portal-slider w-full"
+              disabled={songs.length === 0}
+              className="portal-slider w-full disabled:opacity-30"
               aria-label="Seek timeline"
             />
             <div className="font-space-mono mt-1.5 flex justify-between text-[9px] tracking-[0.15em] text-white/60">
@@ -365,7 +441,8 @@ export default function PortalAudioOS() {
           <div className="flex items-center justify-center gap-3 sm:gap-5 my-2">
             <button
               onClick={toggleShuffle}
-              className={`p-2 transition-colors border border-transparent ${
+              disabled={songs.length === 0}
+              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${
                 isShuffle
                   ? 'border-white/60 bg-white/20 text-white'
                   : 'text-white/50 hover:text-white hover:border-white/30'
@@ -378,7 +455,8 @@ export default function PortalAudioOS() {
 
             <button
               onClick={previous}
-              className="p-2 text-white/80 transition-colors hover:text-white hover:bg-white/10 border border-white/20 active:translate-y-0.5"
+              disabled={songs.length === 0}
+              className="p-2 text-white/80 transition-colors hover:text-white hover:bg-white/10 border border-white/20 active:translate-y-0.5 disabled:opacity-30"
               title="Previous Track"
               aria-label="Previous Track"
             >
@@ -387,7 +465,8 @@ export default function PortalAudioOS() {
 
             <button
               onClick={togglePlay}
-              className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center border-2 border-white bg-white/15 text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all hover:bg-white/30 hover:scale-105 active:scale-95"
+              disabled={songs.length === 0}
+              className="flex h-12 w-12 sm:h-14 sm:w-14 items-center justify-center border-2 border-white bg-white/15 text-white shadow-[0_0_15px_rgba(255,255,255,0.3)] transition-all hover:bg-white/30 hover:scale-105 active:scale-95 disabled:opacity-30 disabled:hover:scale-100"
               title={isPlaying ? 'Pause' : 'Play'}
               aria-label={isPlaying ? 'Pause' : 'Play'}
             >
@@ -396,7 +475,8 @@ export default function PortalAudioOS() {
 
             <button
               onClick={next}
-              className="p-2 text-white/80 transition-colors hover:text-white hover:bg-white/10 border border-white/20 active:translate-y-0.5"
+              disabled={songs.length === 0}
+              className="p-2 text-white/80 transition-colors hover:text-white hover:bg-white/10 border border-white/20 active:translate-y-0.5 disabled:opacity-30"
               title="Next Track"
               aria-label="Next Track"
             >
@@ -405,7 +485,8 @@ export default function PortalAudioOS() {
 
             <button
               onClick={cycleRepeat}
-              className={`p-2 transition-colors border border-transparent ${
+              disabled={songs.length === 0}
+              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${
                 repeatMode !== 'off'
                   ? 'border-white/60 bg-white/20 text-white'
                   : 'text-white/50 hover:text-white hover:border-white/30'
@@ -447,7 +528,7 @@ export default function PortalAudioOS() {
               {currentSong && (
                 <button
                   onClick={() => handleRequestDelete(currentSong)}
-                  className="font-space-mono flex items-center gap-1 border border-red-400/40 bg-red-900/20 px-2 py-1.5 text-[9px] tracking-[0.1em] text-red-200 uppercase transition-all hover:border-red-400 hover:bg-red-800/40"
+                  className="font-space-mono flex items-center gap-1 border border-red-400/40 bg-red-900/20 px-2 py-1.5 text-[9px] tracking-[0.1em] text-red-200 uppercase transition-all hover:border-red-400 hover:bg-red-800/40 cursor-pointer"
                   title="Purge current track record"
                 >
                   <Trash2 size={11} className="text-red-300" />
@@ -458,7 +539,8 @@ export default function PortalAudioOS() {
               {/* Share link button */}
               <button
                 onClick={handleShare}
-                className="font-space-mono flex items-center gap-1.5 border border-white/30 bg-white/5 px-2.5 py-1.5 text-[9px] tracking-[0.15em] text-white/80 uppercase transition-all hover:bg-white/15 hover:text-white hover:border-white/60"
+                disabled={!currentSong}
+                className="font-space-mono flex items-center gap-1.5 border border-white/30 bg-white/5 px-2.5 py-1.5 text-[9px] tracking-[0.15em] text-white/80 uppercase transition-all hover:bg-white/15 hover:text-white hover:border-white/60 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                 title="Copy shareable portal link"
               >
                 {copied ? (
@@ -477,7 +559,7 @@ export default function PortalAudioOS() {
               {/* Upload trigger */}
               <button
                 onClick={() => setShowUpload(true)}
-                className="font-space-mono flex items-center gap-1.5 border border-white/50 bg-[#463DF5] px-2.5 py-1.5 text-[9px] font-bold tracking-[0.15em] text-white uppercase transition-all hover:bg-white hover:text-[#463DF5]"
+                className="font-space-mono flex items-center gap-1.5 border border-white/50 bg-[#463DF5] px-2.5 py-1.5 text-[9px] font-bold tracking-[0.15em] text-white uppercase transition-all hover:bg-white hover:text-[#463DF5] cursor-pointer shadow-[0_0_8px_rgba(70,61,245,0.4)]"
               >
                 <Plus size={11} />
                 + UPLOAD
@@ -502,7 +584,7 @@ export default function PortalAudioOS() {
             {/* Drawer Header Toggle */}
             <button
               onClick={() => setShowTracklist(!showTracklist)}
-              className="font-space-mono flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-4 py-2.5 text-[10px] tracking-[0.2em] text-white/80 uppercase transition-colors hover:bg-white/10 hover:text-white"
+              className="font-space-mono flex w-full items-center justify-between border-b border-white/20 bg-white/5 px-4 py-2.5 text-[10px] tracking-[0.2em] text-white/80 uppercase transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
             >
               <div className="flex items-center gap-2">
                 <span className="h-1.5 w-1.5 bg-white/70" />

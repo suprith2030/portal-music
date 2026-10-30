@@ -37,44 +37,44 @@ export default function DeleteTrackModal({
     e.preventDefault();
     setError('');
 
-    // 1. Verify Admin PIN (accepts configured env pin, 'suprith2030', or default '2026')
-    const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
-      .replace(/^["']|["']$/g, '')
-      .trim();
     const entered = pin.trim();
-    if (entered !== expectedPin && entered !== '2026' && entered !== 'suprith2030') {
-      setError('INVALID SECURITY PIN. ACCESS DENIED.');
+    if (!entered) {
+      setError('PLEASE ENTER SECURITY PIN.');
       return;
     }
 
     setDeleting(true);
 
     try {
-      // 2. Delete song record from Supabase via server API route (most reliable) with client fallback
-      let deleted = false;
+      // 1. Strict Security PIN pre-check with server API
       try {
-        const res = await fetch(`/api/songs?id=${encodeURIComponent(song.id)}`, {
-          method: 'DELETE',
-        });
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.success) {
-          deleted = true;
+        const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
+        if (pinCheck.ok) {
+          const pinRes = await pinCheck.json();
+          if (pinRes.valid === false) {
+            setError('INVALID SECURITY PIN. ACCESS DENIED.');
+            setDeleting(false);
+            return;
+          }
         }
-      } catch (apiErr) {
-        console.warn('API /api/songs DELETE failed, attempting direct Supabase query:', apiErr);
+      } catch (pinErr) {
+        console.warn('PIN pre-check warning:', pinErr);
       }
 
-      if (!deleted) {
-        const client = getSupabase();
-        if (client) {
-          const { error: dbError } = await client
-            .from('songs')
-            .delete()
-            .eq('id', song.id);
-
-          if (dbError) throw dbError;
-          deleted = true;
+      // 2. Delete song record from Supabase via server API route with strict PIN check
+      const res = await fetch(
+        `/api/songs?id=${encodeURIComponent(song.id)}&pin=${encodeURIComponent(entered)}`,
+        {
+          method: 'DELETE',
+          headers: {
+            'x-admin-pin': entered,
+          },
         }
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to purge record from database');
       }
 
       // 3. Immediately update UI state

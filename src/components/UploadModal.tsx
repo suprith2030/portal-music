@@ -289,13 +289,30 @@ export default function UploadModal({
     setProgress(0);
 
     try {
-      // 1. Verify Admin PIN (accepts configured env pin, 'suprith2030', or default '2026')
-      const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
-        .replace(/^["']|["']$/g, '')
-        .trim();
+      // 1. Strict Security PIN verification (pre-flight verified with server)
       const entered = pin.trim();
-      if (entered !== expectedPin && entered !== '2026' && entered !== 'suprith2030') {
-        throw new Error(`Invalid Admin PIN.`);
+      if (!entered) {
+        throw new Error('Please enter your Security PIN.');
+      }
+
+      try {
+        const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
+        if (pinCheck.ok) {
+          const pinRes = await pinCheck.json();
+          if (pinRes.valid === false) {
+            throw new Error('INVALID SECURITY PIN. ACCESS DENIED.');
+          }
+        }
+      } catch (pinErr) {
+        if (pinErr instanceof Error && pinErr.message.includes('INVALID SECURITY PIN')) {
+          throw pinErr;
+        }
+        const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+        if (entered !== expectedPin) {
+          throw new Error('INVALID SECURITY PIN. ACCESS DENIED.');
+        }
       }
 
       // 2. Validate Cloudinary configuration
@@ -378,6 +395,7 @@ export default function UploadModal({
       setStatus('ARCHIVING METADATA IN SUPABASE...');
       let saved = false;
       let saveErrorMessage = '';
+      let isUpdatedRecord = false;
 
       // Primary: Call server-side /api/songs route
       try {
@@ -391,12 +409,14 @@ export default function UploadModal({
             duration: finalDuration,
             audio_url: audioResult.secure_url,
             cover_url: coverUrl,
+            pin: entered,
           }),
         });
 
         const resData = await res.json().catch(() => ({}));
         if (res.ok && resData.success) {
           saved = true;
+          isUpdatedRecord = Boolean(resData.updated);
         } else {
           saveErrorMessage = resData?.error || `Server responded with ${res.status}`;
         }
@@ -431,7 +451,11 @@ export default function UploadModal({
       }
 
       setProgress(100);
-      setStatus('PORTAL UPLOAD COMPLETE // SEQUENCE LOCKED');
+      setStatus(
+        isUpdatedRecord
+          ? 'RECORD UPDATED // NO DUPLICATE CREATED'
+          : 'PORTAL UPLOAD COMPLETE // SEQUENCE LOCKED'
+      );
       setSuccess(true);
 
       setTimeout(() => {

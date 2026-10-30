@@ -20,9 +20,26 @@ function getServerSupabase() {
   return null;
 }
 
-// GET /api/songs - Fetch all songs from Supabase
-export async function GET() {
+function getAdminPin(): string {
+  const raw =
+    process.env.ADMIN_PIN ||
+    process.env.NEXT_PUBLIC_ADMIN_PIN ||
+    '2026';
+  return raw.replace(/^["']|["']$/g, '').trim();
+}
+
+// GET /api/songs - Fetch all songs or verify PIN
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+
+    // Optional PIN verification endpoint: /api/songs?action=verify-pin&pin=...
+    if (searchParams.get('action') === 'verify-pin') {
+      const pin = (searchParams.get('pin') || '').trim();
+      const expected = getAdminPin();
+      return NextResponse.json({ valid: pin === expected });
+    }
+
     const supabase = getServerSupabase();
 
     if (!supabase) {
@@ -36,7 +53,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from('songs')
       .select('*')
-      .order('title', { ascending: true });
+      .order('created_at', { ascending: false });
 
     if (error) {
       console.error('Supabase query error in /api/songs:', error);
@@ -46,10 +63,30 @@ export async function GET() {
       );
     }
 
+    // Deduplicate songs by title + artist (case-insensitive) to ensure NO duplicate tracks in UI
+    const uniqueSongs: Array<(typeof data)[0]> = [];
+    const seen = new Set<string>();
+
+    if (data) {
+      for (const song of data) {
+        const key = `${(song.title || '').trim().toLowerCase()}:::${(song.artist || '').trim().toLowerCase()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          uniqueSongs.push(song);
+        }
+      }
+    }
+
+    // Sort alphabetically by title
+    uniqueSongs.sort((a, b) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+    );
+
     return NextResponse.json({
-      songs: data || [],
+      songs: uniqueSongs,
       isConfigured: true,
-      count: data ? data.length : 0,
+      count: uniqueSongs.length,
+      rawCount: data ? data.length : 0,
     });
   } catch (err) {
     console.error('Server error in /api/songs GET:', err);
@@ -64,12 +101,24 @@ export async function GET() {
   }
 }
 
-// POST /api/songs - Insert a new song record into Supabase
+// POST /api/songs - Insert or update song with strict PIN verification & deduplication
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { title, artist, album, duration, audio_url, cover_url } = body;
+    const { title, artist, album, duration, audio_url, cover_url, pin } = body;
 
+    // 1. Strict Security PIN verification
+    const expectedPin = getAdminPin();
+    const enteredPin = String(pin || '').trim();
+
+    if (!enteredPin || enteredPin !== expectedPin) {
+      return NextResponse.json(
+        { error: 'INVALID SECURITY PIN. ACCESS DENIED.' },
+        { status: 401 }
+      );
+    }
+
+    // 2. Validate payload
     if (!title || !audio_url) {
       return NextResponse.json(
         { error: 'Title and audio_url are required.' },
@@ -82,35 +131,85 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Supabase is not configured on the server. Please verify NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.',
+            'Supabase is not configured on the server. Please check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.',
         },
         { status: 503 }
       );
     }
 
-    const { data, error } = await supabase
-      .from('songs')
-      .insert({
-        title: String(title).trim(),
-        artist: String(artist || 'Unknown Artist').trim(),
-        album: String(album || 'Single').trim(),
-        duration: String(duration || '3:00').trim(),
-        audio_url: String(audio_url).trim(),
-        cover_url: String(cover_url || '').trim(),
-      })
-      .select();
+    const trimmedTitle = String(title).trim();
+    const trimmedArtist = String(artist || 'Unknown Artist').trim();
+    const trimmedAlbum = String(album || 'Single').trim();
+    const trimmedDuration = String(duration || '3:00').trim();
+    const trimmedAudioUrl = String(audio_url).trim();
+    const trimmedCoverUrl = String(cover_url || '').trim();
 
-    if (error) {
-      console.error('Supabase insert error in /api/songs:', error);
-      return NextResponse.json(
-        { error: `Database error: ${error.message}` },
-        { status: 500 }
-      );
+    // 3. Deduplication Check: Look for existing track with same Title & Artist
+    const { data: existingSongs, error: searchError } = await supabase
+      .from('songs')
+      .select('id, title, artist')
+      .ilike('title', trimmedTitle)
+      .ilike('artist', trimmedArtist)
+      .limit(1);
+
+    if (searchError) {
+      console.warn('Deduplication lookup warning:', searchError.message);
+    }
+
+    let songRecord;
+    let isUpdated = false;
+
+    if (existingSongs && existingSongs.length > 0) {
+      // Track already exists: UPDATE the existing row to prevent duplicate rows in DB
+      const existingId = existingSongs[0].id;
+      const { data: updatedData, error: updateError } = await supabase
+        .from('songs')
+        .update({
+          album: trimmedAlbum,
+          duration: trimmedDuration,
+          audio_url: trimmedAudioUrl,
+          cover_url: trimmedCoverUrl,
+        })
+        .eq('id', existingId)
+        .select();
+
+      if (updateError) {
+        console.error('Supabase update error in /api/songs:', updateError);
+        return NextResponse.json(
+          { error: `Database error during update: ${updateError.message}` },
+          { status: 500 }
+        );
+      }
+      songRecord = updatedData ? updatedData[0] : null;
+      isUpdated = true;
+    } else {
+      // New track: INSERT new record
+      const { data: insertedData, error: insertError } = await supabase
+        .from('songs')
+        .insert({
+          title: trimmedTitle,
+          artist: trimmedArtist,
+          album: trimmedAlbum,
+          duration: trimmedDuration,
+          audio_url: trimmedAudioUrl,
+          cover_url: trimmedCoverUrl,
+        })
+        .select();
+
+      if (insertError) {
+        console.error('Supabase insert error in /api/songs:', insertError);
+        return NextResponse.json(
+          { error: `Database error during insert: ${insertError.message}` },
+          { status: 500 }
+        );
+      }
+      songRecord = insertedData ? insertedData[0] : null;
     }
 
     return NextResponse.json({
       success: true,
-      song: data ? data[0] : null,
+      updated: isUpdated,
+      song: songRecord,
     });
   } catch (err) {
     console.error('Server error in /api/songs POST:', err);
@@ -121,11 +220,23 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE /api/songs - Delete a song record by ID
+// DELETE /api/songs - Purge a song record by ID with strict PIN verification
 export async function DELETE(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
+    const pin = searchParams.get('pin') || request.headers.get('x-admin-pin') || '';
+
+    // 1. Strict Security PIN verification
+    const expectedPin = getAdminPin();
+    const enteredPin = String(pin).trim();
+
+    if (!enteredPin || enteredPin !== expectedPin) {
+      return NextResponse.json(
+        { error: 'INVALID SECURITY PIN. ACCESS DENIED.' },
+        { status: 401 }
+      );
+    }
 
     if (!id) {
       return NextResponse.json(
