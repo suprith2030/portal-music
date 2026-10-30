@@ -153,3 +153,4 @@ export async function syncCloudinaryToSupabase(supabase: SupabaseClient | null) 
     return [];
   }
 }
+
