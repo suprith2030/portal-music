@@ -31,9 +31,16 @@ export default function WindowFrame({
             <span className="inline-block h-2.5 w-2.5 border border-white/80 bg-white/10 hover:bg-white/30 transition-colors" />
           </div>
           {title && (
-            <span className="font-orbitron ml-2 text-[10px] tracking-[0.25em] text-white/90 uppercase font-semibold">
-              {title}
-            </span>
+            <div className="flex items-center gap-1.5 ml-1.5">
+              <img
+                src="/logo.png"
+                alt="Logo icon"
+                className="h-3.5 w-3.5 rounded-full border border-white/40 object-cover"
+              />
+              <span className="font-orbitron text-[10px] tracking-[0.25em] text-white/90 uppercase font-semibold">
+                {title}
+              </span>
+            </div>
           )}
         </div>
 

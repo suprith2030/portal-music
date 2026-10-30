@@ -2,14 +2,19 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'PORTAL // AUDIO OS',
+  title: 'v0iD // AUDIO OS',
   description:
-    'A Y2K retro-futuristic cyber-terminal audio player — cloud-powered by Supabase + Cloudflare R2.',
-  keywords: ['audio', 'player', 'portal', 'synthwave', 'music', 'streaming', 'audio os'],
+    'A Y2K retro-futuristic cyber-terminal audio player — powered by Supabase + Cloudinary.',
+  keywords: ['audio', 'player', 'void', 'music', 'streaming', 'audio os'],
+  icons: {
+    icon: '/logo.png',
+    apple: '/logo.png',
+  },
   openGraph: {
-    title: 'PORTAL // AUDIO OS',
+    title: 'v0iD // AUDIO OS',
     description: 'True game-changing cyber-terminal audio system.',
     type: 'website',
+    images: ['/logo.png'],
   },
 };
 

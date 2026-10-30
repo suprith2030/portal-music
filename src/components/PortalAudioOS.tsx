@@ -300,7 +300,17 @@ export default function PortalAudioOS() {
       </div>
 
       {/* ── Top Header Text & Geometric Micro-UI ── */}
-      <div className="relative z-10 mb-6 text-center">
+      <div className="relative z-10 mb-6 flex flex-col items-center text-center">
+        {/* App Logo Emblem */}
+        <div className="relative mb-3 flex items-center justify-center">
+          <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-pink-500 via-indigo-500 to-cyan-400 opacity-60 blur-md animate-pulse" />
+          <img
+            src="/logo.png"
+            alt="v0iD Audio OS Logo"
+            className="relative h-20 w-20 sm:h-24 sm:w-24 rounded-full border-2 border-white/60 object-cover shadow-[0_0_25px_rgba(168,85,247,0.5)] transition-transform hover:scale-105 duration-300"
+          />
+        </div>
+
         <div className="inline-flex items-center gap-2 border border-white/60 bg-[#463DF5]/30 px-3 py-0.5 backdrop-blur-xs mb-2">
           <span className="h-1.5 w-1.5 bg-white animate-pulse" />
           <span className="font-space-mono text-[9px] font-bold tracking-[0.25em] text-white uppercase">
@@ -338,7 +348,13 @@ export default function PortalAudioOS() {
                 className="absolute inset-0"
               />
             ) : (
-              <div className="absolute inset-0 bg-gradient-to-b from-[#463DF5] to-[#3A30D8]" />
+              <div className="absolute inset-0 bg-gradient-to-b from-[#463DF5] to-[#3A30D8] flex items-center justify-center">
+                <img
+                  src="/logo.png"
+                  alt="v0iD Logo"
+                  className="h-28 w-28 rounded-full border border-white/20 object-cover opacity-40 shadow-[0_0_20px_rgba(168,85,247,0.3)] select-none"
+                />
+              </div>
             )}
 
             <div
