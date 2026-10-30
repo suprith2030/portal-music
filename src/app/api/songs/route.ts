@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { deleteFromCloudinary, syncCloudinaryToSupabase } from '@/lib/cloudinary';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -36,7 +37,7 @@ function isValidUUID(str?: string | null): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 }
 
-// GET /api/songs - Fetch all songs or verify PIN
+// GET /api/songs - Fetch all songs or verify PIN (includes live two-way sync with Cloudinary)
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -56,6 +57,13 @@ export async function GET(request: NextRequest) {
         isConfigured: false,
         message: 'Supabase environment variables not configured on server.',
       });
+    }
+
+    // Two-Way Sync: Sync any audio files uploaded directly in Cloudinary web console into Supabase
+    try {
+      await syncCloudinaryToSupabase(supabase);
+    } catch (syncErr) {
+      console.warn('Background Cloudinary sync note:', syncErr);
     }
 
     const { data, error } = await supabase
@@ -109,7 +117,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST /api/songs - Insert/Update song OR Purge song (via action: 'delete')
+// POST /api/songs - Insert/Update song OR Purge song from Cloudinary AND Supabase
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -137,11 +145,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Handle Action: DELETE (via robust POST method) ──
+    // ── Handle Action: DELETE (Purges from Cloudinary storage AND Supabase) ──
     if (action === 'delete') {
       let totalDeleted = 0;
 
-      // 1. Delete by UUID if valid
+      // 1. Delete physical asset from Cloudinary storage
+      if (audio_url) {
+        await deleteFromCloudinary(audio_url, 'video');
+      }
+      if (cover_url && cover_url.includes('cloudinary.com')) {
+        await deleteFromCloudinary(cover_url, 'image');
+      }
+
+      // If audio_url was not provided directly in body, look it up by ID
+      if (!audio_url && isValidUUID(id)) {
+        const { data: found } = await supabase
+          .from('songs')
+          .select('audio_url, cover_url')
+          .eq('id', id.trim())
+          .limit(1);
+
+        if (found && found.length > 0) {
+          if (found[0].audio_url) {
+            await deleteFromCloudinary(found[0].audio_url, 'video');
+          }
+          if (found[0].cover_url && found[0].cover_url.includes('cloudinary.com')) {
+            await deleteFromCloudinary(found[0].cover_url, 'image');
+          }
+        }
+      }
+
+      // 2. Delete by UUID from Supabase
       if (isValidUUID(id)) {
         const { data: delById, error: errById } = await supabase
           .from('songs')
@@ -156,7 +190,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 2. Also delete any duplicate rows with same Title & Artist
+      // 3. Also delete any duplicate rows with same Title & Artist from Supabase
       if (title && artist) {
         const { data: delByTitle, error: errByTitle } = await supabase
           .from('songs')
@@ -172,7 +206,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // 3. Also delete by audio_url if provided
+      // 4. Also delete by audio_url if provided
       if (audio_url) {
         const { data: delByAudio } = await supabase
           .from('songs')
@@ -284,13 +318,14 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// DELETE /api/songs - Purge a song record by ID/Title with strict PIN verification
+// DELETE /api/songs - Purge a song record from Cloudinary AND Supabase
 export async function DELETE(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const id = searchParams.get('id');
     const title = searchParams.get('title');
     const artist = searchParams.get('artist');
+    const audioUrl = searchParams.get('audio_url');
     const pin = searchParams.get('pin') || request.headers.get('x-admin-pin') || '';
 
     // 1. Strict Security PIN verification
@@ -304,9 +339,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    if (!id && !title) {
+    if (!id && !title && !audioUrl) {
       return NextResponse.json(
-        { error: 'Song ID or Title is required for deletion.' },
+        { error: 'Song ID, Title, or audio_url is required for deletion.' },
         { status: 400 }
       );
     }
@@ -319,9 +354,22 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    // 1. Delete physical file from Cloudinary storage
+    if (audioUrl) {
+      await deleteFromCloudinary(audioUrl, 'video');
+    } else if (isValidUUID(id)) {
+      const { data: row } = await supabase.from('songs').select('audio_url, cover_url').eq('id', id).limit(1);
+      if (row && row.length > 0) {
+        if (row[0].audio_url) await deleteFromCloudinary(row[0].audio_url, 'video');
+        if (row[0].cover_url && row[0].cover_url.includes('cloudinary.com')) {
+          await deleteFromCloudinary(row[0].cover_url, 'image');
+        }
+      }
+    }
+
     let deletedCount = 0;
 
-    // Purge by UUID if valid
+    // 2. Purge by UUID if valid
     if (isValidUUID(id)) {
       const { data: delById, error: errById } = await supabase
         .from('songs')
@@ -336,7 +384,7 @@ export async function DELETE(request: NextRequest) {
       }
     }
 
-    // Also purge all duplicates by title & artist if provided
+    // 3. Also purge all duplicates by title & artist if provided
     if (title && artist) {
       const { data: delByTitle } = await supabase
         .from('songs')

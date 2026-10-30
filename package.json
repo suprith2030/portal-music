@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.118.0",
+    "cloudinary": "^2.11.0",
     "jsmediatags": "^3.9.7",
     "lucide-react": "^1.64.0",
     "next": "16.4.3",
