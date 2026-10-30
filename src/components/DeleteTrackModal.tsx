@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Loader2, Trash2, X } from 'lucide-react';
 import type { Song } from '@/types';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabase } from '@/lib/supabase';
 import WindowFrame from './WindowFrame';
 
 interface DeleteTrackModalProps {
@@ -50,14 +50,31 @@ export default function DeleteTrackModal({
     setDeleting(true);
 
     try {
-      // 2. Delete song record from Supabase if configured
-      if (supabase && isSupabaseConfigured) {
-        const { error: dbError } = await supabase
-          .from('songs')
-          .delete()
-          .eq('id', song.id);
+      // 2. Delete song record from Supabase via server API route (most reliable) with client fallback
+      let deleted = false;
+      try {
+        const res = await fetch(`/api/songs?id=${encodeURIComponent(song.id)}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success) {
+          deleted = true;
+        }
+      } catch (apiErr) {
+        console.warn('API /api/songs DELETE failed, attempting direct Supabase query:', apiErr);
+      }
 
-        if (dbError) throw dbError;
+      if (!deleted) {
+        const client = getSupabase();
+        if (client) {
+          const { error: dbError } = await client
+            .from('songs')
+            .delete()
+            .eq('id', song.id);
+
+          if (dbError) throw dbError;
+          deleted = true;
+        }
       }
 
       // 3. Immediately update UI state

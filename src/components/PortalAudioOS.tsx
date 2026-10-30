@@ -21,7 +21,7 @@ import {
   X,
 } from 'lucide-react';
 import type { Song } from '@/types';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabase } from '@/lib/supabase';
 import { FALLBACK_TRACKS } from '@/lib/fallback-tracks';
 import useAudioPlayer from '@/hooks/useAudioPlayer';
 import WindowFrame from './WindowFrame';
@@ -70,28 +70,50 @@ export default function PortalAudioOS() {
     loadTrack,
   } = useAudioPlayer(songs, currentIndex, setCurrentIndex);
 
-  // Fetch songs from Supabase or fallback and sort alphabetically
+  // Fetch songs from Supabase (server API route first, direct client fallback) or fallback tracks
   const fetchSongs = useCallback(async () => {
     setLoading(true);
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data, error } = await supabase
-          .from('songs')
-          .select('*')
-          .order('title', { ascending: true });
+    let loadedSongs: Song[] | null = null;
 
-        if (error) throw error;
-        if (data && data.length > 0) {
-          setSongs(sortAlphabetical(data as Song[]));
-        } else {
-          setSongs(sortAlphabetical(FALLBACK_TRACKS));
+    // 1. Primary: Server API route (bypasses client build-time env variable inlining issues on Vercel)
+    try {
+      const res = await fetch('/api/songs', { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.songs) && json.songs.length > 0) {
+          loadedSongs = json.songs as Song[];
         }
-      } catch {
-        setSongs(sortAlphabetical(FALLBACK_TRACKS));
       }
+    } catch (e) {
+      console.warn('API /api/songs GET failed, attempting direct Supabase query:', e);
+    }
+
+    // 2. Secondary fallback: Direct Supabase client query
+    if (!loadedSongs) {
+      const client = getSupabase();
+      if (client) {
+        try {
+          const { data, error } = await client
+            .from('songs')
+            .select('*')
+            .order('title', { ascending: true });
+
+          if (!error && data && data.length > 0) {
+            loadedSongs = data as Song[];
+          }
+        } catch (e) {
+          console.warn('Direct client Supabase query failed:', e);
+        }
+      }
+    }
+
+    // 3. Update state with retrieved database songs or default fallback tracks
+    if (loadedSongs && loadedSongs.length > 0) {
+      setSongs(sortAlphabetical(loadedSongs));
     } else {
       setSongs(sortAlphabetical(FALLBACK_TRACKS));
     }
+
     setLoading(false);
   }, []);
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Music, Image as ImageIcon, Loader2, CheckCircle2, AlertTriangle, Disc3 } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getSupabase } from '@/lib/supabase';
 import WindowFrame from './WindowFrame';
 
 interface UploadModalProps {
@@ -374,18 +374,60 @@ export default function UploadModal({
           ? formatSecondsToDuration(audioResult.duration)
           : localDuration;
 
-      // 8. Write metadata row to Supabase PostgreSQL table 'songs'
+      // 8. Write metadata row to Supabase via server API route (most reliable on Vercel deployments)
       setStatus('ARCHIVING METADATA IN SUPABASE...');
-      if (supabase && isSupabaseConfigured) {
-        const { error: dbError } = await supabase.from('songs').insert({
-          title: finalTitle,
-          artist: finalArtist,
-          album: finalAlbum,
-          duration: finalDuration,
-          audio_url: audioResult.secure_url,
-          cover_url: coverUrl,
+      let saved = false;
+      let saveErrorMessage = '';
+
+      // Primary: Call server-side /api/songs route
+      try {
+        const res = await fetch('/api/songs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            duration: finalDuration,
+            audio_url: audioResult.secure_url,
+            cover_url: coverUrl,
+          }),
         });
-        if (dbError) throw dbError;
+
+        const resData = await res.json().catch(() => ({}));
+        if (res.ok && resData.success) {
+          saved = true;
+        } else {
+          saveErrorMessage = resData?.error || `Server responded with ${res.status}`;
+        }
+      } catch (apiErr) {
+        saveErrorMessage = apiErr instanceof Error ? apiErr.message : 'Network failure';
+      }
+
+      // Fallback: Direct client Supabase call if available
+      if (!saved) {
+        const client = getSupabase();
+        if (client) {
+          const { error: dbError } = await client.from('songs').insert({
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            duration: finalDuration,
+            audio_url: audioResult.secure_url,
+            cover_url: coverUrl,
+          });
+          if (dbError) {
+            throw new Error(`Database error: ${dbError.message}`);
+          }
+          saved = true;
+        }
+      }
+
+      // If both server route and client fallback could not save, fail fast with a clear error
+      if (!saved) {
+        throw new Error(
+          `Failed to save song to Supabase: ${saveErrorMessage || 'Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.'}`
+        );
       }
 
       setProgress(100);
