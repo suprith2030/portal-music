@@ -304,16 +304,16 @@ export default function PortalAudioOS() {
         <div className="inline-flex items-center gap-2 border border-white/60 bg-[#463DF5]/30 px-3 py-0.5 backdrop-blur-xs mb-2">
           <span className="h-1.5 w-1.5 bg-white animate-pulse" />
           <span className="font-space-mono text-[9px] font-bold tracking-[0.25em] text-white uppercase">
-            TRUE GAME CHANGING
+            Just Vibe
           </span>
         </div>
 
         <h1 className="font-orbitron text-4xl sm:text-5xl md:text-6xl font-black tracking-[0.35em] text-white drop-shadow-[0_4px_16px_rgba(70,61,245,0.45)] select-none">
-          PORTAL
+          v0iD
         </h1>
 
         <p className="font-space-mono mt-1 text-[10px] sm:text-[11px] tracking-[0.3em] text-white/90 uppercase font-medium">
-          ui/ux // tracks // queue // motion
+          ಸ್ವಾಗತ
         </p>
 
         <p className="font-caveat mt-1 text-base sm:text-lg text-white/75 font-semibold">
@@ -359,9 +359,8 @@ export default function PortalAudioOS() {
 
             <div className="absolute top-2 left-2 flex items-center gap-1.5 border border-white/30 bg-[#3A30D8]/80 px-2 py-0.5">
               <span
-                className={`h-1.5 w-1.5 rounded-none ${
-                  isPlaying ? 'bg-green-400 animate-ping' : 'bg-white/50'
-                }`}
+                className={`h-1.5 w-1.5 rounded-none ${isPlaying ? 'bg-green-400 animate-ping' : 'bg-white/50'
+                  }`}
               />
               <span className="font-space-mono text-[8px] tracking-[0.15em] text-white uppercase">
                 {isPlaying ? 'ACTIVE STREAM' : 'IDLE WAVE'}
@@ -373,8 +372,8 @@ export default function PortalAudioOS() {
                 {isDemoMode
                   ? 'DEMO MODE // 3 SAMPLES'
                   : songs.length === 0
-                  ? 'ARCHIVE // EMPTY'
-                  : `SUPABASE // ${songs.length} TRACKS`}
+                    ? 'ARCHIVE // EMPTY'
+                    : `SUPABASE // ${songs.length} TRACKS`}
               </span>
             </div>
 
@@ -478,11 +477,10 @@ export default function PortalAudioOS() {
             <button
               onClick={toggleShuffle}
               disabled={songs.length === 0}
-              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${
-                isShuffle
+              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${isShuffle
                   ? 'border-white/60 bg-white/20 text-white'
                   : 'text-white/50 hover:text-white hover:border-white/30'
-              }`}
+                }`}
               title="Toggle Shuffle"
               aria-label="Toggle Shuffle"
             >
@@ -522,11 +520,10 @@ export default function PortalAudioOS() {
             <button
               onClick={cycleRepeat}
               disabled={songs.length === 0}
-              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${
-                repeatMode !== 'off'
+              className={`p-2 transition-colors border border-transparent disabled:opacity-30 ${repeatMode !== 'off'
                   ? 'border-white/60 bg-white/20 text-white'
                   : 'text-white/50 hover:text-white hover:border-white/30'
-              }`}
+                }`}
               title={`Repeat: ${repeatMode.toUpperCase()}`}
               aria-label={`Repeat: ${repeatMode.toUpperCase()}`}
             >
