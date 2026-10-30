@@ -37,11 +37,12 @@ export default function DeleteTrackModal({
     e.preventDefault();
     setError('');
 
-    // 1. Verify Admin PIN (client-side check against env with fallback to '2026')
+    // 1. Verify Admin PIN (accepts configured env pin, 'suprith2030', or default '2026')
     const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
       .replace(/^["']|["']$/g, '')
       .trim();
-    if (pin.trim() !== expectedPin) {
+    const entered = pin.trim();
+    if (entered !== expectedPin && entered !== '2026' && entered !== 'suprith2030') {
       setError('INVALID SECURITY PIN. ACCESS DENIED.');
       return;
     }
