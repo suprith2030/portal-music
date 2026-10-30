@@ -47,50 +47,61 @@ export default function DeleteTrackModal({
 
     try {
       // 1. Strict Security PIN pre-check with server API
-      try {
-        const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
-        if (pinCheck.ok) {
-          const pinRes = await pinCheck.json();
-          if (pinRes.valid === false) {
-            setError('INVALID SECURITY PIN. ACCESS DENIED.');
-            setDeleting(false);
-            return;
-          }
+      const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
+      if (pinCheck.ok) {
+        const pinRes = await pinCheck.json();
+        if (pinRes.valid === false) {
+          setError('INVALID SECURITY PIN. ACCESS DENIED.');
+          setDeleting(false);
+          return;
         }
-      } catch (pinErr) {
-        console.warn('PIN pre-check warning:', pinErr);
+      } else {
+        // Fallback local check if server check unreachable
+        const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+        if (entered !== expectedPin) {
+          setError('INVALID SECURITY PIN. ACCESS DENIED.');
+          setDeleting(false);
+          return;
+        }
       }
 
       let purgedSuccessfully = false;
       let failureReason = '';
 
       // 2. Primary Method: POST /api/songs with action: 'delete'
-      // This is immune to HTTP method restrictions on proxies/hosting
-      try {
-        const res = await fetch('/api/songs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'delete',
-            id: song.id,
-            title: song.title,
-            artist: song.artist,
-            audio_url: song.audio_url,
-            pin: entered,
-          }),
-        });
+      // This deletes from Cloudinary storage AND Supabase
+      const res = await fetch('/api/songs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'delete',
+          id: song.id,
+          title: song.title,
+          artist: song.artist,
+          audio_url: song.audio_url,
+          cover_url: song.cover_url,
+          pin: entered,
+        }),
+      });
 
-        const data = await res.json().catch(() => ({}));
-        if (res.ok && data.success) {
-          purgedSuccessfully = true;
-        } else {
-          failureReason = data?.error || `Server returned status ${res.status}`;
-        }
-      } catch (postErr) {
-        failureReason = postErr instanceof Error ? postErr.message : 'Network error during purge';
+      const data = await res.json().catch(() => ({}));
+
+      // If server explicitly denied PIN, abort immediately — NEVER fall back!
+      if (res.status === 401 || (data?.error && data.error.includes('PIN'))) {
+        setError('INVALID SECURITY PIN. ACCESS DENIED.');
+        setDeleting(false);
+        return;
       }
 
-      // 3. Secondary Method Fallback: DELETE /api/songs
+      if (res.ok && data.success) {
+        purgedSuccessfully = true;
+      } else {
+        failureReason = data?.error || `Server returned status ${res.status}`;
+      }
+
+      // 3. Secondary Method Fallback: DELETE /api/songs only if server had a non-401 error
       if (!purgedSuccessfully) {
         try {
           const delRes = await fetch(
@@ -102,6 +113,11 @@ export default function DeleteTrackModal({
               },
             }
           );
+          if (delRes.status === 401) {
+            setError('INVALID SECURITY PIN. ACCESS DENIED.');
+            setDeleting(false);
+            return;
+          }
           const delData = await delRes.json().catch(() => ({}));
           if (delRes.ok && delData.success) {
             purgedSuccessfully = true;
@@ -111,25 +127,27 @@ export default function DeleteTrackModal({
         }
       }
 
-      // 4. Tertiary Fallback: Direct Client Supabase Delete
-      try {
-        const client = getSupabase();
-        if (client) {
-          const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(song.id);
-          if (isUUID) {
-            await client.from('songs').delete().eq('id', song.id);
+      // 4. Tertiary Fallback: Direct Client Supabase Delete (ONLY if server route was 503/offline, never for 401)
+      if (!purgedSuccessfully && res.status >= 500) {
+        try {
+          const client = getSupabase();
+          if (client) {
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(song.id);
+            if (isUUID) {
+              await client.from('songs').delete().eq('id', song.id);
+            }
+            if (song.title && song.artist) {
+              await client
+                .from('songs')
+                .delete()
+                .ilike('title', song.title.trim())
+                .ilike('artist', song.artist.trim());
+            }
+            purgedSuccessfully = true;
           }
-          if (song.title && song.artist) {
-            await client
-              .from('songs')
-              .delete()
-              .ilike('title', song.title.trim())
-              .ilike('artist', song.artist.trim());
-          }
-          purgedSuccessfully = true;
+        } catch (clientErr) {
+          console.warn('Direct client Supabase purge warning:', clientErr);
         }
-      } catch (clientErr) {
-        console.warn('Direct client Supabase purge warning:', clientErr);
       }
 
       if (!purgedSuccessfully) {

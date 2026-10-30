@@ -59,11 +59,54 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Two-Way Sync: Sync any audio files uploaded directly in Cloudinary web console into Supabase
-    try {
-      await syncCloudinaryToSupabase(supabase);
-    } catch (syncErr) {
-      console.warn('Background Cloudinary sync note:', syncErr);
+    // Explicit manual sync request: /api/songs?action=sync
+    if (searchParams.get('action') === 'sync') {
+      const syncResult = await syncCloudinaryToSupabase(supabase);
+      const { data: syncedSongs } = await supabase
+        .from('songs')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      // Deduplicate songs by title + artist
+      const uniqueSynced: Array<any> = [];
+      const seenKey = new Set<string>();
+      for (const s of syncedSongs || []) {
+        const k = `${(s.title || '').trim().toLowerCase()}:::${(s.artist || '').trim().toLowerCase()}`;
+        if (!seenKey.has(k)) {
+          seenKey.add(k);
+          uniqueSynced.push(s);
+        }
+      }
+      uniqueSynced.sort((a, b) =>
+        (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+      );
+
+      return NextResponse.json({
+        songs: uniqueSynced,
+        isConfigured: true,
+        count: uniqueSynced.length,
+        synced: true,
+        syncResult,
+      });
+    }
+
+    // Check if Supabase has 0 songs — if so, run initial sync immediately
+    const { count: existingCount } = await supabase
+      .from('songs')
+      .select('*', { count: 'exact', head: true });
+
+    if (!existingCount || existingCount === 0) {
+      try {
+        await syncCloudinaryToSupabase(supabase);
+      } catch (syncErr) {
+        console.warn('Initial Cloudinary sync note:', syncErr);
+      }
+    } else {
+      // If songs exist, run fast sync with a 2.5s safeguard so Vercel never times out
+      Promise.race([
+        syncCloudinaryToSupabase(supabase),
+        new Promise((_, reject) => setTimeout(() => reject('timeout'), 2500)),
+      ]).catch(() => {});
     }
 
     const { data, error } = await supabase

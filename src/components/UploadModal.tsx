@@ -295,18 +295,13 @@ export default function UploadModal({
         throw new Error('Please enter your Security PIN.');
       }
 
-      try {
-        const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
-        if (pinCheck.ok) {
-          const pinRes = await pinCheck.json();
-          if (pinRes.valid === false) {
-            throw new Error('INVALID SECURITY PIN. ACCESS DENIED.');
-          }
+      const pinCheck = await fetch(`/api/songs?action=verify-pin&pin=${encodeURIComponent(entered)}`);
+      if (pinCheck.ok) {
+        const pinRes = await pinCheck.json();
+        if (pinRes.valid === false) {
+          throw new Error('INVALID SECURITY PIN. ACCESS DENIED.');
         }
-      } catch (pinErr) {
-        if (pinErr instanceof Error && pinErr.message.includes('INVALID SECURITY PIN')) {
-          throw pinErr;
-        }
+      } else {
         const expectedPin = (process.env.NEXT_PUBLIC_ADMIN_PIN || '2026')
           .replace(/^["']|["']$/g, '')
           .trim();
@@ -414,6 +409,11 @@ export default function UploadModal({
         });
 
         const resData = await res.json().catch(() => ({}));
+
+        if (res.status === 401 || (resData?.error && resData.error.includes('PIN'))) {
+          throw new Error('INVALID SECURITY PIN. ACCESS DENIED.');
+        }
+
         if (res.ok && resData.success) {
           saved = true;
           isUpdatedRecord = Boolean(resData.updated);
@@ -421,6 +421,9 @@ export default function UploadModal({
           saveErrorMessage = resData?.error || `Server responded with ${res.status}`;
         }
       } catch (apiErr) {
+        if (apiErr instanceof Error && apiErr.message.includes('INVALID SECURITY PIN')) {
+          throw apiErr;
+        }
         saveErrorMessage = apiErr instanceof Error ? apiErr.message : 'Network failure';
       }
 

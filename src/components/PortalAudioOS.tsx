@@ -20,6 +20,7 @@ import {
   Trash2,
   X,
   AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 import type { Song } from '@/types';
 import { getSupabase } from '@/lib/supabase';
@@ -48,6 +49,7 @@ export default function PortalAudioOS() {
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDemoMode, setIsDemoMode] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Delete modal state
   const [songToDelete, setSongToDelete] = useState<Song | null>(null);
@@ -134,6 +136,24 @@ export default function PortalAudioOS() {
     setSongs(sortAlphabetical(FALLBACK_TRACKS));
     setCurrentIndex(0);
     setIsDemoMode(true);
+  };
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await fetch('/api/songs?action=sync', { cache: 'no-store' });
+      if (res.ok) {
+        const json = await res.json();
+        if (Array.isArray(json.songs)) {
+          setSongs(sortAlphabetical(json.songs));
+          setIsDemoMode(false);
+        }
+      }
+    } catch (e) {
+      console.warn('Manual Cloudinary sync warning:', e);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   useEffect(() => {
@@ -563,6 +583,17 @@ export default function PortalAudioOS() {
                     SHARE
                   </>
                 )}
+              </button>
+
+              {/* Cloudinary Two-Way Sync button */}
+              <button
+                onClick={handleSync}
+                disabled={isSyncing}
+                className="font-space-mono flex items-center gap-1.5 border border-white/30 bg-white/5 px-2.5 py-1.5 text-[9px] tracking-[0.15em] text-white/80 uppercase transition-all hover:bg-white/15 hover:text-white hover:border-white/60 disabled:opacity-40 cursor-pointer"
+                title="Sync songs with Cloudinary Media Library"
+              >
+                <RefreshCw size={11} className={isSyncing ? 'animate-spin text-cyan-300' : ''} />
+                {isSyncing ? 'SYNCING...' : 'SYNC'}
               </button>
 
               {/* Upload trigger */}
